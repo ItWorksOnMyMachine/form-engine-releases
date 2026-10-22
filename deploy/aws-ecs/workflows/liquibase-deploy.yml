@@ -1,0 +1,188 @@
+# TEMPLATE: copy to .github/workflows/ in the deploying organization's
+# deployment repository (no source code needed).
+#
+# Applies a release's Liquibase changelog to the environment's database. The
+# database is private, so Liquibase runs as a one-off ECS task inside the VPC:
+#   1. (optional) invoke a db-init Lambda that creates the database if missing
+#   2. download the release's changelog (form-engine-liquibase-<version>.tar.gz),
+#      verify it against the release's SHA256SUMS, add this repository's own
+#      liquibase/changelog/adopter/ changesets, and upload the result to S3
+#   3. run the Liquibase task with --contexts=production (skips dev-seed data)
+#   4. wait for it and fail the job on a non-zero exit code
+#
+# Configure per GitHub Environment (dev, uat, prod):
+#   secrets.AWS_GITHUB_ROLE              or AWS_<ENV>_GITHUB_ROLE (see app-deploy.yml)
+#   vars.RELEASES_REPO                   optional, default ItWorksOnMyMachine/form-engine-releases
+#   vars.AWS_REGION
+#   vars.DB_NAME                         e.g. form_engine
+#   vars.DB_INIT_LAMBDA                  optional, e.g. liquibase-dev-db-init
+#   vars.LIQUIBASE_S3_BUCKET             bucket the Liquibase task reads changelogs from
+#   vars.LIQUIBASE_DB_CLUSTER_ID         Aurora cluster identifier
+#   vars.LIQUIBASE_ECS_CLUSTER
+#   vars.LIQUIBASE_TASK_DEFINITION
+#   vars.LIQUIBASE_SUBNET_IDS            comma-separated
+#   vars.LIQUIBASE_SECURITY_GROUP_IDS    comma-separated
+#   vars.LIQUIBASE_LOG_GROUP             optional, for the log tail step
+#   vars.DB_APP_USER_SECRET_ID           optional: passes a SCRAM-SHA-256 verifier of
+#                                        that secret's password to the task as
+#                                        APP_USER_PASSWORD, for an adopter changeset
+#                                        that creates the app role with
+#                                        CREATE/ALTER ROLE ... PASSWORD '<value>'
+#                                        (liquibase/changelog/adopter/change-log.xml).
+#                                        PostgreSQL stores a verifier as given; the
+#                                        plaintext never reaches Liquibase, whose
+#                                        logs print the substituted SQL.
+#
+# The task's container must be named "liquibase" and read S3_CHANGELOG_PREFIX,
+# LIQUIBASE_COMMAND_URL and LIQUIBASE_COMMAND_CONTEXTS.
+name: Deploy database migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options: [dev, uat, prod]
+        default: dev
+      version:
+        description: Release version, e.g. 1.0.0.0
+        required: true
+        type: string
+
+concurrency:
+  group: liquibase-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Migrate ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: write # deployment tag
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      DB_NAME: ${{ vars.DB_NAME || 'form_engine' }}
+      RELEASES_REPO: ${{ vars.RELEASES_REPO || 'ItWorksOnMyMachine/form-engine-releases' }}
+      VERSION: ${{ inputs.version }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      # Role: secrets.AWS_GITHUB_ROLE (per Environment), else the per-account
+      # convention AWS_<ENV>_GITHUB_ROLE (e.g. organization secrets).
+      AWS_ROLE_ARN: ${{ secrets.AWS_GITHUB_ROLE || (inputs.environment == 'dev' && secrets.AWS_DEV_GITHUB_ROLE) || (inputs.environment == 'uat' && secrets.AWS_UAT_GITHUB_ROLE) || (inputs.environment == 'prod' && secrets.AWS_PROD_GITHUB_ROLE) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require configuration
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::version must look like 1.2.3 or 1.2.3.4 (no leading v)"; exit 1
+          fi
+          if [ -z "$AWS_ROLE_ARN" ]; then
+            echo "::error::No deploy role: set secrets.AWS_GITHUB_ROLE for environment $ENVIRONMENT, or AWS_${ENVIRONMENT^^}_GITHUB_ROLE"; exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Ensure the database exists
+        if: vars.DB_INIT_LAMBDA != ''
+        run: |
+          timeout 60s aws lambda invoke --function-name "${{ vars.DB_INIT_LAMBDA }}" \
+            --payload "{\"database_name\":\"$DB_NAME\"}" --cli-binary-format raw-in-base64-out \
+            --region "$AWS_REGION" response.json
+          STATUS="$(jq -r '.statusCode' response.json)"
+          if [ "$STATUS" != "200" ]; then cat response.json; exit 1; fi
+          jq '{database, database_existed}' response.json
+          rm response.json
+
+      - name: Download the release changelog
+        run: |
+          BASE="https://github.com/$RELEASES_REPO/releases/download/v$VERSION"
+          ASSET="form-engine-liquibase-$VERSION.tar.gz"
+          mkdir -p release && cd release
+          curl -fsSLO "$BASE/$ASSET"
+          curl -fsSLO "$BASE/SHA256SUMS"
+          sha256sum --check --ignore-missing --strict SHA256SUMS
+          tar -xzf "$ASSET"   # -> release/liquibase
+          # This organization's changesets (e.g. the app login role), which the
+          # release's master changelog includes when present
+          if [ -d ../liquibase/changelog/adopter ]; then
+            cp -r ../liquibase/changelog/adopter liquibase/changelog/adopter
+          fi
+          find liquibase -name '*.xml' | sort
+
+      - name: Upload changelogs
+        run: |
+          aws s3 sync ./release/liquibase/ "s3://${{ vars.LIQUIBASE_S3_BUCKET }}/$DB_NAME/" \
+            --delete --exclude "liquibase.properties" --region "$AWS_REGION"
+
+      - name: Hash app-user password (optional)
+        if: vars.DB_APP_USER_SECRET_ID != ''
+        run: |
+          PW="$(aws secretsmanager get-secret-value --secret-id "${{ vars.DB_APP_USER_SECRET_ID }}" \
+                --region "$AWS_REGION" --query SecretString --output text | jq -r '.password')"
+          if [ -z "$PW" ] || [ "$PW" = "null" ]; then echo "::error::No 'password' key in the app-user secret"; exit 1; fi
+          echo "::add-mask::$PW"
+          # PostgreSQL's SCRAM-SHA-256 verifier format (RFC 5802/7677). It can't be used to
+          # log in, so it is safe in the Liquibase task's logs; the plaintext is not.
+          # shellcheck disable=SC2016 # the $ in the Python source is literal, not bash
+          VERIFIER="$(PW="$PW" python3 -c '
+          import base64, hashlib, hmac, os
+          pw, salt, n = os.environ["PW"].encode(), os.urandom(16), 4096
+          salted = hashlib.pbkdf2_hmac("sha256", pw, salt, n)
+          client = hmac.new(salted, b"Client Key", "sha256").digest()
+          server = hmac.new(salted, b"Server Key", "sha256").digest()
+          b64 = lambda b: base64.b64encode(b).decode()
+          print(f"SCRAM-SHA-256${n}:{b64(salt)}${b64(hashlib.sha256(client).digest())}:{b64(server)}")
+          ')"
+          case "$VERIFIER" in SCRAM-SHA-256\$4096:*) ;; *) echo "::error::Could not hash the app-user password"; exit 1;; esac
+          echo "::add-mask::$VERIFIER"
+          echo "APP_USER_PASSWORD=$VERIFIER" >> "$GITHUB_ENV"
+
+      - name: Run Liquibase task
+        id: task
+        run: |
+          ENDPOINT="$(aws rds describe-db-clusters --db-cluster-identifier "${{ vars.LIQUIBASE_DB_CLUSTER_ID }}" \
+                       --region "$AWS_REGION" --query 'DBClusters[0].Endpoint' --output text)"
+          PORT="$(aws rds describe-db-clusters --db-cluster-identifier "${{ vars.LIQUIBASE_DB_CLUSTER_ID }}" \
+                   --region "$AWS_REGION" --query 'DBClusters[0].Port' --output text)"
+          ENV_JSON="$(jq -cn \
+            --arg prefix "$DB_NAME/" \
+            --arg url "jdbc:postgresql://$ENDPOINT:$PORT/$DB_NAME" \
+            --arg tag "$(date -u +%Y%m%d_%H%M%S)_$GITHUB_RUN_ID" \
+            --arg pw "${APP_USER_PASSWORD:-}" \
+            '[{name:"S3_CHANGELOG_PREFIX",value:$prefix},{name:"LIQUIBASE_COMMAND_URL",value:$url},
+              {name:"LIQUIBASE_COMMAND_CONTEXTS",value:"production"},{name:"DEPLOYMENT_TAG",value:$tag}]
+             + (if $pw == "" then [] else [{name:"APP_USER_PASSWORD",value:$pw}] end)')"
+          OVERRIDES="$(jq -cn --argjson env "$ENV_JSON" '{containerOverrides:[{name:"liquibase",environment:$env}]}')"
+          ARN="$(aws ecs run-task --cluster "${{ vars.LIQUIBASE_ECS_CLUSTER }}" \
+                  --task-definition "${{ vars.LIQUIBASE_TASK_DEFINITION }}" --launch-type FARGATE \
+                  --network-configuration "awsvpcConfiguration={subnets=[${{ vars.LIQUIBASE_SUBNET_IDS }}],securityGroups=[${{ vars.LIQUIBASE_SECURITY_GROUP_IDS }}],assignPublicIp=DISABLED}" \
+                  --overrides "$OVERRIDES" --region "$AWS_REGION" --query 'tasks[0].taskArn' --output text)"
+          if [ -z "$ARN" ] || [ "$ARN" = "None" ]; then echo "::error::Liquibase task did not start"; exit 1; fi
+          echo "arn=$ARN" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Liquibase
+        run: |
+          aws ecs wait tasks-stopped --cluster "${{ vars.LIQUIBASE_ECS_CLUSTER }}" --tasks "${{ steps.task.outputs.arn }}" --region "$AWS_REGION"
+          CODE="$(aws ecs describe-tasks --cluster "${{ vars.LIQUIBASE_ECS_CLUSTER }}" --tasks "${{ steps.task.outputs.arn }}" \
+                   --region "$AWS_REGION" --query 'tasks[0].containers[0].exitCode' --output text)"
+          if [ "$CODE" != "0" ]; then echo "::error::Liquibase exited with $CODE"; exit 1; fi
+          echo "Migrations applied"
+
+      - name: Liquibase log
+        if: always() && vars.LIQUIBASE_LOG_GROUP != ''
+        run: aws logs tail "${{ vars.LIQUIBASE_LOG_GROUP }}" --since 15m --format short --region "$AWS_REGION" || true
+
+      - name: Tag the migration
+        run: |
+          TAG="db-migrated-${ENVIRONMENT}-${VERSION}-$(date -u +%Y%m%d-%H%M%S)"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "form-engine $VERSION migrations applied to ${ENVIRONMENT} (run $GITHUB_RUN_ID)"
+          git push origin "$TAG"

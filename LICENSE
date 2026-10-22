@@ -1,0 +1,142 @@
+FORM ENGINE SOFTWARE LICENSE
+
+Copyright (c) 2026 Clak Holdings, LLC. All rights reserved.
+
+This license ("License") governs use of the Form Engine software published
+by Clak Holdings, LLC ("Licensor"). By downloading, installing, or using the
+Software, you agree to this License on behalf of yourself and the
+organization you represent ("Licensee"). If you do not agree, do not use
+the Software.
+
+1. DEFINITIONS
+
+"Software" means the Form Engine container images, database migration
+files, embed script, deployment templates, and documentation that Licensor
+publishes, including updates Licensor makes available.
+
+"License Key" means a license key issued by Licensor for the Software.
+
+"Evaluation Use" means installing and using the Software to evaluate it,
+including development, testing, and demonstrations, but not to collect
+responses from the public or to operate any business process.
+
+"Production Use" means any use other than Evaluation Use.
+
+2. EVALUATION LICENSE
+
+Licensor grants Licensee a free, non-exclusive, non-transferable, revocable
+license to install and use the Software for Evaluation Use only. Without a
+valid License Key, the Software displays a notice that it is an unlicensed
+copy; Licensee may not remove, hide, or alter that notice.
+
+3. COMMERCIAL LICENSE
+
+Production Use requires a valid License Key purchased from Licensor.
+Subject to this License and to payment of the applicable fees, Licensor
+grants Licensee a non-exclusive, non-transferable license, for the term of
+the License Key, to install and use the Software for Production Use by
+Licensee and its affiliates for their own business purposes. A License Key
+may carry an expiration date; when it expires, the rights in this Section
+end until the License Key is renewed. Licensee may run the Software on
+infrastructure of its choice, including a third-party cloud or hosting
+provider, provided the Software is used only for Licensee's own Production
+Use. Providing the Software as a hosted service to unaffiliated third
+parties, including by a cloud or hosting provider to its own customers,
+requires a separate written agreement with Licensor.
+
+4. RESTRICTIONS
+
+Except as this License expressly permits, Licensee may not:
+
+  (a) copy, distribute, sell, rent, lease, sublicense, or otherwise make the
+      Software available to any third party, other than contractors
+      operating it solely on Licensee's behalf;
+  (b) modify, adapt, or create derivative works of the Software;
+  (c) reverse engineer, decompile, or disassemble the Software, except to
+      the extent applicable law expressly permits despite this limitation;
+  (d) remove, disable, or circumvent the License Key check, generate
+      License Keys, or alter the unlicensed-copy notice;
+  (e) share or publish a License Key outside Licensee's organization; or
+  (f) remove or alter any copyright, trademark, or proprietary notice.
+
+Forms, schemas, branding, and other content that Licensee creates with the
+Software are Licensee's and are not derivative works of the Software.
+
+5. LICENSEE DATA
+
+The Software runs on infrastructure that Licensee controls. Licensee owns
+all data it collects or stores with the Software. The License Key check is
+performed offline; the Software does not send Licensee data to Licensor.
+
+6. THIRD-PARTY COMPONENTS
+
+The Software includes open-source components that are licensed under their
+own terms. Those components and their license texts are listed in the
+third-party notices that accompany the Software (published with each
+release, included in the container image, and served by the Software at
+/third-party-notices.txt). Nothing in this License limits Licensee's rights
+under those terms.
+
+7. OWNERSHIP
+
+The Software is licensed, not sold. Licensor and its licensors retain all
+right, title, and interest in the Software, including all intellectual
+property rights. All rights not expressly granted are reserved.
+
+8. FEEDBACK
+
+Licensor may use any suggestions or feedback Licensee provides about the
+Software without restriction or obligation.
+
+9. SUPPORT AND UPDATES
+
+This License does not include support, maintenance, or updates. Any such
+services are provided only under a separate written agreement.
+
+10. DISCLAIMER OF WARRANTIES
+
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. LICENSOR
+DOES NOT WARRANT THAT THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE.
+LICENSEE IS RESPONSIBLE FOR ITS DEPLOYMENT, CONFIGURATION, SECURITY, AND
+BACKUPS, AND FOR ITS COMPLIANCE WITH LAWS THAT APPLY TO THE DATA IT
+COLLECTS.
+
+11. LIMITATION OF LIABILITY
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, LICENSOR WILL NOT BE LIABLE FOR ANY
+INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR FOR
+ANY LOSS OF DATA, PROFITS, REVENUE, OR BUSINESS, ARISING OUT OF OR RELATED
+TO THE SOFTWARE OR THIS LICENSE, EVEN IF ADVISED OF THEIR POSSIBILITY.
+LICENSOR'S TOTAL LIABILITY ARISING OUT OF OR RELATED TO THE SOFTWARE OR
+THIS LICENSE WILL NOT EXCEED THE FEES LICENSEE PAID FOR THE SOFTWARE IN THE
+TWELVE (12) MONTHS BEFORE THE EVENT GIVING RISE TO THE CLAIM, OR, FOR
+EVALUATION USE, ZERO DOLLARS.
+
+12. TERMINATION
+
+This License ends automatically if Licensee breaches it. Licensor may end
+the evaluation license at any time by notice. When this License ends,
+Licensee must stop using the Software and delete its copies, except as
+needed to retain data that Licensee owns. Sections 4 through 8 and 10
+through 14 survive termination.
+
+13. GOVERNING LAW
+
+This License is governed by the laws of the Commonwealth of Kentucky, USA,
+without regard to its conflict-of-laws rules. The state and federal courts
+located in Kentucky have exclusive jurisdiction over any dispute arising
+out of or related to this License.
+
+14. ENTIRE AGREEMENT
+
+This License is the entire agreement between the parties about the
+Software and supersedes any prior understanding. A signed agreement or
+order form between Licensor and Licensee for the Software takes precedence
+over this License where they conflict. If any provision is unenforceable,
+the rest of this License remains in effect.
+
+15. CONTACT
+
+Licensing and License Keys: sales@clakholdings.com

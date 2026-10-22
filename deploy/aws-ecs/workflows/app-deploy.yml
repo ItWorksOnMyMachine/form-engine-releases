@@ -1,0 +1,130 @@
+# TEMPLATE: copy to .github/workflows/ in the deploying organization's
+# deployment repository (no source code needed).
+#
+# Copies a released image (ghcr.io/itworksonmymachine/form-engine:<version>)
+# into the organization's ECR with the version tag plus a mutable
+# per-environment tag, and forces a new ECS deployment so the service picks
+# up the environment tag. No Terraform apply is needed to ship a release, and
+# ECS never pulls from the public registry at runtime.
+#
+# Apply the same release's migrations first (liquibase-deploy.yml).
+#
+# Configure one GitHub Environment per target (dev, uat, prod) with:
+#   secrets.AWS_GITHUB_ROLE   IAM role ARN assumed via GitHub OIDC; or instead
+#                             AWS_DEV_GITHUB_ROLE / AWS_UAT_GITHUB_ROLE /
+#                             AWS_PROD_GITHUB_ROLE (e.g. organization secrets)
+#   vars.AWS_REGION           e.g. us-west-1 (always explicit)
+#   vars.ECR_REPOSITORY       default: form-engine
+#   vars.ECS_CLUSTER          e.g. forms-dev-cluster
+#   vars.ECS_SERVICE          e.g. forms-dev-service
+#   vars.SOURCE_IMAGE         optional, default ghcr.io/itworksonmymachine/form-engine
+# Protect uat/prod with required reviewers in the Environment settings.
+name: Deploy app
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options: [dev, uat, prod]
+        default: dev
+      version:
+        description: Release version, e.g. 1.0.0.0
+        required: true
+        type: string
+
+concurrency:
+  group: app-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: write # deployment tag
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'form-engine' }}
+      SOURCE_IMAGE: ${{ vars.SOURCE_IMAGE || 'ghcr.io/itworksonmymachine/form-engine' }}
+      VERSION: ${{ inputs.version }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      # Role: secrets.AWS_GITHUB_ROLE (per Environment), else the per-account
+      # convention AWS_<ENV>_GITHUB_ROLE (e.g. organization secrets).
+      AWS_ROLE_ARN: ${{ secrets.AWS_GITHUB_ROLE || (inputs.environment == 'dev' && secrets.AWS_DEV_GITHUB_ROLE) || (inputs.environment == 'uat' && secrets.AWS_UAT_GITHUB_ROLE) || (inputs.environment == 'prod' && secrets.AWS_PROD_GITHUB_ROLE) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require configuration
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::version must look like 1.2.3 or 1.2.3.4 (no leading v)"; exit 1
+          fi
+          for v in AWS_REGION; do
+            if [ -z "${!v}" ]; then echo "::error::vars.$v is not set for environment $ENVIRONMENT"; exit 1; fi
+          done
+          if [ -z "$AWS_ROLE_ARN" ]; then
+            echo "::error::No deploy role: set secrets.AWS_GITHUB_ROLE for environment $ENVIRONMENT, or AWS_${ENVIRONMENT^^}_GITHUB_ROLE"; exit 1
+          fi
+          if [ -z "${{ vars.ECS_CLUSTER }}" ] || [ -z "${{ vars.ECS_SERVICE }}" ]; then
+            echo "::error::vars.ECS_CLUSTER and vars.ECS_SERVICE must be set for environment $ENVIRONMENT"; exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" --region "$AWS_REGION" >/dev/null 2>&1 \
+            || aws ecr create-repository --repository-name "$ECR_REPOSITORY" --region "$AWS_REGION" \
+                 --image-scanning-configuration scanOnPush=true >/dev/null
+
+      - id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Copy the release image to ECR
+        id: image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          # The release image is public: no registry login needed to pull it
+          docker pull --platform linux/amd64 "$SOURCE_IMAGE:$VERSION"
+          docker tag "$SOURCE_IMAGE:$VERSION" "$REGISTRY/$ECR_REPOSITORY:$VERSION"
+          docker tag "$SOURCE_IMAGE:$VERSION" "$REGISTRY/$ECR_REPOSITORY:$ENVIRONMENT"
+          docker push "$REGISTRY/$ECR_REPOSITORY:$VERSION"
+          docker push "$REGISTRY/$ECR_REPOSITORY:$ENVIRONMENT"
+          echo "version_tag=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Roll out to ECS
+        run: |
+          CLUSTER="${{ vars.ECS_CLUSTER }}"; SERVICE="${{ vars.ECS_SERVICE }}"
+          STATUS="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --region "$AWS_REGION" \
+                     --query 'services[0].status' --output text 2>/dev/null || echo NOT_FOUND)"
+          if [ "$STATUS" != "ACTIVE" ]; then
+            echo "::warning::Service $SERVICE not found in $CLUSTER; image pushed but not rolled out (create the service first)."
+            exit 0
+          fi
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --force-new-deployment --region "$AWS_REGION" >/dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE" --region "$AWS_REGION"
+          echo "Rolled out $SERVICE"
+
+      - name: Tag the deployment
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          TAG="app-deployed-${ENVIRONMENT}-${VERSION}-$(date -u +%Y%m%d-%H%M%S)"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Deployed form-engine $VERSION to ${ENVIRONMENT}: $REGISTRY/$ECR_REPOSITORY:${{ steps.image.outputs.version_tag }} (run $GITHUB_RUN_ID)"
+          git push origin "$TAG"
+          {
+            echo "## Deployed to ${ENVIRONMENT}"
+            echo "- Image: \`$REGISTRY/$ECR_REPOSITORY:${{ steps.image.outputs.version_tag }}\`"
+            echo "- Tag: \`$TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"
