@@ -201,7 +201,7 @@ before storage. Keep the two in sync when changing field types.
 | `multiselect` | `options` (min 1) | string[] in option order (rendered as a checkbox group; required = at least one checked) |
 | `radio` | `options` (min 1), `inline?: boolean` | string |
 | `checkbox` | `checkboxLabel?: string` | boolean |
-| `date` | `minDate?`, `maxDate?` (ISO `YYYY-MM-DD`) | string `YYYY-MM-DD` |
+| `date` | `minDate?`, `maxDate?`: a date (`YYYY-MM-DD`) or relative to today (see below) | string `YYYY-MM-DD` |
 | `rating` | `options` (min 2) | string (value of the selected star) |
 | `nps` | `options` (min 2; designed for 3) | string |
 | `repeatable` | see below | array of objects |
@@ -217,6 +217,34 @@ freely. A plain string is used as both label and value.
 ```json
 "options": ["Yes", "No", { "label": "Not sure", "value": "unsure" }]
 ```
+
+### date limits
+
+`minDate` and `maxDate` limit the dates a respondent can pick. Each is a
+fixed date (`"2027-01-31"`) or **date math** relative to the day the form
+is filled out, a subset of the Elasticsearch/Grafana syntax:
+
+| Value | Means |
+|-------|-------|
+| `now` | today |
+| `now+1y` | one year after today |
+| `now-30d` | 30 days before today |
+| `now+1y-1d` | one year after today, minus a day (terms apply left to right) |
+
+Units: `d` days, `w` weeks, `M` months (capital: lowercase `m` is minutes
+in date math), `y` years; amounts up to 4 digits. Month and year steps keep
+to the last day of a shorter month (Jan 31 + `1M` = Feb 28). Anything else
+is rejected when the form is saved.
+
+- The date picker greys out dates outside the limits, Next/Submit shows
+  "Choose a date on or before/after ...", and the server checks again on
+  final submit (also inside repeatable rows).
+- "Today" is the respondent's local date. The server can't know their time
+  zone, so it allows one day of slack on relative limits (fixed dates are
+  exact): a respondent near midnight is never wrongly rejected.
+- In the builder: Allowed dates, with None / Fixed date / Relative to today
+  / Expression per limit and a help (?) panel. Logic:
+  `src/lib/date-bounds.ts`.
 
 ### rating
 
@@ -418,7 +446,7 @@ against the field and silently ignored if invalid:
 | `select`, `radio`, `rating`, `nps` | an existing option value |
 | `multiselect` | comma-separated option values (invalid ones dropped) |
 | `number` | numeric, within `validation.min/max` |
-| `date` | a parseable date, normalised to `YYYY-MM-DD`, within `minDate/maxDate` |
+| `date` | a parseable date, normalised to `YYYY-MM-DD`, within `minDate/maxDate` (fixed or relative) |
 | `checkbox` | `true` or `false` |
 | `text`, `email`, `phone`, `textarea` | any string |
 | `repeatable`, `section`, `html` | ignored |

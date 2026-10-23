@@ -60,6 +60,9 @@ date, rating, NPS, and repeatable. For each field set:
   and avoid renaming after the form is live.
 - **Label, description, placeholder, width** (full or half).
 - **Options** for select, multi-select, radio, rating and NPS.
+- **Allowed dates** (date fields): earliest and latest date, fixed or
+  relative to the day the form is filled out (e.g. no future dates, or up
+  to a year ahead). The **?** next to it explains the options.
 - **Validation**: required (optionally with a custom message), min/max
   length, min/max value, regex pattern with message.
 - **Condition**: show the field only when another field matches (equals,
